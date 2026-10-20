@@ -1,0 +1,216 @@
+
+#include <LiquidCrystal.h>
+#include <EEPROM.h>
+
+LiquidCrystal lcd(12, 11, 5, 6, 7, 9);
+
+const byte lightPin = A0;
+const byte btnPlus = 3;
+const byte btnMinus = 4;
+const byte btnPower = 2;
+const byte piezoPin = 8;
+
+struct Settings {
+  byte magic;
+  byte version;
+  byte limit;
+  byte alarmOn;
+};
+
+Settings settings;
+const byte MAGIC = 0xA5;
+const byte VERSION = 2;
+
+volatile unsigned long ticks = 0;
+volatile bool powerEvent = false;
+
+int light = 0;
+bool lastPlus = HIGH;
+bool lastMinus = HIGH;
+bool beepOn = false;
+bool powerReady = true;
+bool powerChecking = false;
+
+unsigned long lastButtons = 0;
+unsigned long lastLight = 0;
+unsigned long lastLCD = 0;
+unsigned long lastBeep = 0;
+unsigned long lastPower = 0;
+unsigned long powerStart = 0;
+
+ISR(TIMER1_COMPA_vect) {
+  ticks++;
+}
+
+void powerInterrupt() {
+  powerEvent = true;
+}
+
+void setupTimer1() {
+  noInterrupts();
+  TCCR1A = 0;
+  TCCR1B = 0;
+  TCNT1 = 0;
+  OCR1A = 249;
+  TCCR1B = (1 << WGM12) | (1 << CS11) | (1 << CS10);
+  TIMSK1 |= (1 << OCIE1A);
+  interrupts();
+}
+
+unsigned long getTime() {
+  noInterrupts();
+  unsigned long now = ticks;
+  interrupts();
+  return now;
+}
+
+void saveSettings() {
+  EEPROM.put(0, settings);
+}
+
+void loadSettings() {
+  EEPROM.get(0, settings);
+
+  if (settings.magic != MAGIC ||
+      settings.version != VERSION ||
+      settings.limit > 100 ||
+      settings.alarmOn > 1) {
+
+    settings.magic = MAGIC;
+    settings.version = VERSION;
+    settings.limit = 30;
+    settings.alarmOn = 1;
+    saveSettings();
+  }
+}
+
+void readLight() {
+  int raw = analogRead(lightPin);
+  light = map(raw, 0, 1023, 0, 100);
+}
+
+void checkButtons(unsigned long now) {
+  if (now - lastButtons < 15) return;
+  lastButtons = now;
+
+  bool plus = digitalRead(btnPlus);
+  bool minus = digitalRead(btnMinus);
+
+  if (plus == LOW && lastPlus == HIGH) {
+    if (settings.limit <= 95) {
+      settings.limit += 5;
+      saveSettings();
+    }
+  }
+
+  if (minus == LOW && lastMinus == HIGH) {
+    if (settings.limit >= 5) {
+      settings.limit -= 5;
+      saveSettings();
+    }
+  }
+
+  lastPlus = plus;
+  lastMinus = minus;
+
+  bool pending;
+  noInterrupts();
+  pending = powerEvent;
+  powerEvent = false;
+  interrupts();
+
+  if (pending && powerReady) {
+    powerReady = false;
+    powerChecking = true;
+    powerStart = now;
+  }
+
+  if (powerChecking && now - powerStart >= 20) {
+    powerChecking = false;
+    if (digitalRead(btnPower) == LOW) {
+      settings.alarmOn = !settings.alarmOn;
+      saveSettings();
+    }
+  }
+
+  if (!powerReady && !powerChecking &&
+      digitalRead(btnPower) == HIGH) {
+    if (now - lastPower >= 20) {
+      powerReady = true;
+    }
+  }
+
+  if (digitalRead(btnPower) == LOW) {
+    lastPower = now;
+  }
+}
+
+void updateAlarm(unsigned long now) {
+  bool alarm = settings.alarmOn && light < settings.limit;
+
+  if (!alarm) {
+    if (beepOn) noTone(piezoPin);
+    beepOn = false;
+    lastBeep = now;
+    return;
+  }
+
+  if (now - lastBeep >= (beepOn ? 300 : 700)) {
+    lastBeep = now;
+    beepOn = !beepOn;
+
+    if (beepOn) tone(piezoPin, 1000);
+    else noTone(piezoPin);
+  }
+}
+
+void updateDisplay() {
+  lcd.setCursor(0, 0);
+  lcd.print("Light: ");
+  lcd.print(light);
+  lcd.print("%     ");
+
+  lcd.setCursor(0, 1);
+  lcd.print("Limit: ");
+  lcd.print(settings.limit);
+  lcd.print("% ");
+  lcd.print(settings.alarmOn ? "ON " : "OFF");
+  lcd.print(" ");
+}
+
+void setup() {
+  pinMode(btnPlus, INPUT_PULLUP);
+  pinMode(btnMinus, INPUT_PULLUP);
+  pinMode(btnPower, INPUT_PULLUP);
+  pinMode(piezoPin, OUTPUT);
+
+  lastPlus = digitalRead(btnPlus);
+  lastMinus = digitalRead(btnMinus);
+
+  lcd.begin(16, 2);
+  loadSettings();
+  readLight();
+  updateDisplay();
+
+  setupTimer1();
+  attachInterrupt(digitalPinToInterrupt(btnPower),
+                  powerInterrupt, FALLING);
+}
+
+void loop() {
+  unsigned long now = getTime();
+
+  checkButtons(now);
+
+  if (now - lastLight >= 200) {
+    lastLight = now;
+    readLight();
+  }
+
+  if (now - lastLCD >= 200) {
+    lastLCD = now;
+    updateDisplay();
+  }
+
+  updateAlarm(now);
+}
