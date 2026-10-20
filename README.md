@@ -15,7 +15,7 @@ The system uses hardware timer interrupts, an external interrupt, non-blocking s
 - Arduino UNO R3
 - 16×2 LCD display (1602A)
 - Photoresistor (LDR)
-- 10 kΩ resistor
+- 2 kΩ resistor
 - 3 push buttons
 - Piezo buzzer
 - Breadboard and jumper wires
@@ -41,7 +41,7 @@ The system uses hardware timer interrupts, an external interrupt, non-blocking s
 
 - One LDR leg connects to 5V.
 - The other LDR leg connects to A0.
-- A 10 kΩ resistor connects between A0 and GND.
+- A 2 kΩ resistor connects between A0 and GND.
 
 **LCD additional connections:**
 
